@@ -1,4 +1,4 @@
-name: deny
+name: cargo deny
 
 on:
   push:
