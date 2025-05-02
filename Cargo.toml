@@ -5,11 +5,11 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-syslog = { version = "7.0.0", default-features = false }
-log = "0.4.27"
-neli = { version = "0.6.5", default-features = false }
-serde  = { version = "1.0.219", features = ["derive"] }
-toml = "0.8.22"
+syslog = { version = "7.0",    default-features = false }
+neli   = { version = "0.6",    default-features = false }
+serde  = { version = "1",      features = ["derive"] }
+toml   = "0.8"
+log    = "0.4"
 
 [profile.release]
 lto = "fat"
