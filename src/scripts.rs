@@ -9,7 +9,9 @@ pub fn run(ev: Event) -> io::Result<()> {
         Event::PowerRestored => "power-restored",
         Event::FullyCharged  => "fully-charged",
         Event::Critical      => "critical",
-        Event::None          => return Ok(()),
+        /* We do not run any scripts for the initial charge, or None */
+        Event::InitialCharge => return Ok(()),
+        Event::NoChange      => return Ok(()),
     };
 
     let entries = match fs::read_dir(SCRIPT_DIR) {

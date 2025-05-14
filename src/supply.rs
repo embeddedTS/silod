@@ -1,153 +1,210 @@
-use std::{
-    fs,
-    io,
-    path::Path,
-    time::Duration,
-};
-
-use neli::{
-    consts::socket::NlFamily,
-    nl::{Nlmsghdr, NlPayload},
-    socket::NlSocketHandle,
-};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::io::Error;
+use std::io::ErrorKind;
 
 use crate::config::Config;
+use crate::uevent::Uevent;
 
-const DT_TABLE: &[(&str, &str)] = &[("technologic,tssilo", "tssilo")];
-
-const DT_ROOTS: &[&str] = &["/proc/device-tree", "/sys/firmware/devicetree/base"];
-const PS_DIR: &str = "/sys/class/power_supply";
-const UEVENT_MCAST_GRP: u32 = 1;
-const NAME_KEY: &str = "POWER_SUPPLY_NAME=";
-const EVENT_KEY: &str = "SILO_EVENT=";
-
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Event {
-    None,
+    NoChange,
     PowerFail,
     PowerRestored,
     FullyCharged,
+    InitialCharge,
     Critical,
 }
 
 pub struct Supply {
-    sock: NlSocketHandle,
-    sysname: String,
+    driver_name: String,
+    base_path: PathBuf,
+    uevent: Uevent,
+    current_event: Event,
 }
 
 impl Supply {
-    pub fn init(cfg: &Config) -> io::Result<Self> {
-        let sysname = find_dt_compatible()?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no silo in DT"))?
-            .to_owned();
+    pub fn new() -> io::Result<Self> {
+        let driver_name = "tssilo".to_string();
+        let base_path = PathBuf::from("/sys/class/power_supply").join(&driver_name);
 
-        check_sysfs_device(&sysname)?;
+        Self::verify_power_supply(&base_path)?;
 
-        let _ = fs::write(
-            format!("{PS_DIR}/{sysname}/charge_current_ma"),
-            format!("{}\n", cfg.charge_current_ma),
+        let uevent = Uevent::connect()?;
+        Ok(Supply {
+            driver_name,
+            base_path,
+            uevent,
+            current_event: Event::NoChange,
+        })
+    }
+
+    pub fn wait_event(&mut self) -> io::Result<Event> {
+        /* Blocks until uevent notifies us of a 'change' for this driver. */
+        self.uevent.wait_event(&self.driver_name, None)?;
+
+        let capacity = self.sysfs_read_u32("capacity")?;
+        let crit_pct = self.sysfs_read_u32("capacity_alert_min")?;
+        let online = self.sysfs_read_u32("online")? == 1;
+        let status = self.sysfs_read_str("status")?;
+
+        log::info!(
+            "wait_event: status='{}', capacity={}%, critical_threshold={}%, online={}",
+            status, capacity, crit_pct, online
         );
 
-        let sock = NlSocketHandle::connect(NlFamily::Generic, None, &[])
-            .map_err(to_io)?;
-        sock.add_mcast_membership(&[UEVENT_MCAST_GRP])
-            .map_err(to_io)?;
-
-        Ok(Supply { sock, sysname })
-    }
-
-    pub fn wait_event(&mut self, _timeout: Option<Duration>) -> io::Result<Event> {
-        let nlhdr: Nlmsghdr<u16, Vec<u8>> =
-            self.sock.recv().map_err(to_io)?.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::WouldBlock, "no message available")
-            })?;
-
-        let payload = match nlhdr.nl_payload {
-            NlPayload::Payload(p) => p,
-            _ => return Ok(Event::None),
+        let ret = if capacity < crit_pct && self.current_event != Event::InitialCharge {
+            /* If this isn't our initial startup, and our capacity is < critical, we always
+             * consider this critical regardless of any other state */
+            Event::Critical
+        } else {
+            match self.current_event {
+                Event::InitialCharge => {
+                    if online && capacity == 100 {
+                        Event::FullyCharged
+                    } else if !online {
+                        Event::PowerFail
+                    } else {
+                        Event::NoChange
+                    }
+                }
+                Event::FullyCharged => {
+                    if online {
+                        Event::NoChange
+                    } else {
+                        Event::PowerFail
+                    }
+                }
+                Event::PowerFail => {
+                    if online {
+                        Event::PowerRestored
+                    } else {
+                        Event::NoChange
+                    }
+                }
+                Event::PowerRestored => {
+                    if online && capacity == 100 {
+                        Event::FullyCharged
+                    } else if !online {
+                        Event::PowerFail
+                    } else {
+                        Event::NoChange
+                    }
+                }
+                _ => Event::NoChange
+            }
         };
 
-        parse_blob(&payload, &self.sysname)
+        Ok(ret)
     }
-}
 
-fn to_io<E: std::error::Error + Send + Sync + 'static>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e)
-}
+    pub fn apply_config(&self, cfg: &Config) -> io::Result<()> {
+        if let Some(enable_charging) = cfg.enable_charging {
+            let key = "charge_behaviour";
+            let value = if enable_charging { "auto" }
+                        else { "inhibit-charging" };
+            
+            let res = self.sysfs_write_str(key, value);
+            self.log_attr_result_str(key, value, res);
+        }
 
-fn parse_blob(payload: &[u8], sysname: &str) -> io::Result<Event> {
-    let mut match_device = false;
-    let mut ev = Event::None;
+        if let Some(min_power_on_pct) = cfg.min_power_on_pct {
+            let key = "device/min_power_on_pct";
+            let value = min_power_on_pct;
+            
+            let res = self.sysfs_write_u32(key, value);
+            self.log_attr_result(key, value, res);
+        }
 
-    for s in payload.split(|b| *b == 0) {
-        let s = std::str::from_utf8(s).unwrap_or("");
-        if let Some(rest) = s.strip_prefix(NAME_KEY) {
-            match_device = rest == sysname;
-        } else if let Some(val) = s.strip_prefix(EVENT_KEY) {
-            ev = match val {
-                "POWER_FAIL"      => Event::PowerFail,
-                "POWER_RESTORED"  => Event::PowerRestored,
-                "FULLY_CHARGED"   => Event::FullyCharged,
-                "CRITICAL"        => Event::Critical,
-                _                 => Event::None,
+        if let Some(startup_charge_current_ma) = cfg.startup_charge_current_ma {
+            let key = "startup_charge_current_ma";
+            let value = startup_charge_current_ma;
+            
+            let res = self.sysfs_write_u32(key, value);
+            self.log_attr_result(key, value, res);
+        }
+
+        let key = "capacity_alert_min";
+        let value = cfg.critical_pct;
+        let res = self.sysfs_write_u32(key, value);
+        self.log_attr_result(key, value, res);
+
+        Ok(())
+    }
+
+    fn verify_power_supply(dir: &Path) -> io::Result<()> {
+        if dir.is_dir() {
+            Ok(())
+        } else {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+
+    fn log_attr_result_str(&self, key: &str, requested: &str, res: io::Result<String>) {
+        match res {
+            Ok(actual) if actual == requested => {
+                log::info!("{key} set to {actual}");
+            }
+            Ok(actual) => {
+                log::warn!("requested {key}={requested}, but driver reports {actual}");
+            }
+            Err(e) => {
+                log::warn!("failed to set/read {key}: {e}");
             }
         }
     }
-    Ok(if match_device { ev } else { Event::None })
-}
 
-fn find_dt_compatible() -> io::Result<Option<&'static str>> {
-    for root in DT_ROOTS {
-        if !Path::new(root).exists() {
-            continue;
-        }
-        if let Some(name) = recurse_dt(Path::new(root))? {
-            return Ok(Some(name));
+    fn log_attr_result(&self, key: &str, requested: u32, res: io::Result<u32>) {
+        match res {
+            Ok(actual) if actual == requested => {
+                log::info!("{key} set to {actual}");
+            }
+            Ok(actual) => {
+                log::warn!("requested {key}={requested}, but driver reports {actual}");
+            }
+            Err(e) => {
+                log::warn!("failed to set/read {key}: {e}");
+            }
         }
     }
-    Ok(None)
-}
 
-fn recurse_dt(dir: &Path) -> io::Result<Option<&'static str>> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let node = entry.path();
+    fn sysfs_read_u32(&self, attr: &str) -> io::Result<u32> {
+        let path = self.base_path.join(attr);
+        let value = fs::read_to_string(&path)?;
+        let value = value.parse::<u32>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to parse '{}': {}", value, e)))?;
 
-        // read compatible property
-        let compat = fs::read(node.join("compatible")).unwrap_or_default();
-        for (compat_str, drv) in DT_TABLE {
-            let mut p = compat.as_slice();
-            while let Some(pos) = p.iter().position(|b| *b == 0) {
-                if &p[..pos] == compat_str.as_bytes()
-                    && status_ok(&node)?
-                {
-                    return Ok(Some(*drv));
+        Ok(value)
+    }
+
+    fn sysfs_read_str(&self, attr: &str) -> io::Result<String> {
+        let path = self.base_path.join(attr);
+        let content = fs::read_to_string(&path)?;
+        Ok(content.trim().to_string())
+    }
+
+    fn sysfs_write_u32(&self, attr: &str, requested: u32) -> io::Result<u32> {
+        let path = self.base_path.join(attr);
+        fs::write(&path, format!("{requested}\n"))?;
+        self.sysfs_read_u32(attr)
+    }
+
+    fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<String> {
+        let path = self.base_path.join(attr);
+        fs::write(&path, format!("{requested}\n"))?;
+        
+        let readback = self.sysfs_read_str(attr)?;
+        let actual = readback
+            .split_whitespace()
+            .find_map(|word| {
+                if word.starts_with('[') && word.ends_with(']') {
+                    Some(word.trim_matches(['[', ']'].as_ref()))
+                } else {
+                    None
                 }
-                p = &p[pos + 1..];
-            }
-        }
-        // recurse
-        if let Some(d) = recurse_dt(&node)? {
-            return Ok(Some(d));
-        }
-    }
-    Ok(None)
-}
+            })
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "No bracketed value found"))?;
 
-fn status_ok(node: &Path) -> io::Result<bool> {
-    let s = fs::read(node.join("status")).unwrap_or_default();
-    Ok(matches!(&s[..], b"okay"))
-}
-
-fn check_sysfs_device(name: &str) -> io::Result<()> {
-    for entry in fs::read_dir(PS_DIR)? {
-        let entry = entry?;
-        if entry.file_name() == name {
-            return Ok(());
-        }
+        Ok(actual.to_string())
     }
-    Err(io::Error::from(io::ErrorKind::NotFound))
 }
