@@ -1,0 +1,40 @@
+###### Required ######
+## If the supercaps fall to this percentage, we shut down
+critical_pct = 80
+
+###### Optional ######
+## The charge current used on startup. e.g., typically 0-1000 mA.
+## This value is persistent.
+## Default is product specific, but typically the maximum charging rate.
+#startup_charge_current_ma = 1000
+## This is the same setting, but calculates the mA based on a products available
+## charge current
+#startup_charge_current_pct = 100
+
+## If the minimum power on percent is > 0, then the system will charge the
+## supercaps to the given percentage before fully booting.
+## This value is persistent.
+## This is typically 0 by default.
+#min_power_on_pct = 0
+
+## If specified, this will enable or disable charging on startup.
+## This value is persistent.
+## This is typically 0 by default
+#enable_charging = true
+
+##### Recommended, highest protection ######
+## This provides the most protection, so that if power is lost at any moment
+## data is protected. The tradeoff is this will take some time before powering
+## up initially so caps are charged to handle a power loss on startup
+#critical_pct = 60
+#enable_charging = true
+#min_power_on_pct = 80
+#startup_charge_current_pct = 100
+
+##### Recommended, but lacking startup protection #####
+## This provides protection from power loss after startup, but has a window on
+## startup where power can be lost and corrupt data when powering back up.
+#critical_pct = 60
+#enable_charging = true
+#min_power_on_pct = 0
+#startup_charge_current_pct = 100
