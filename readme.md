@@ -27,7 +27,7 @@ Features:
 3. [Running as a systemd service](#running-as-a-systemd-service)
 4. [Logging](#logging)
 5. [Contributing](#contributing)
-6. [License](#license)hvae a 
+6. [License](#license)
 
 ---
 
@@ -35,11 +35,9 @@ Features:
 
 ### Build on the target platform
 
-```bash
-# Install Rust (if you don't have it yet)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
+Install rust if it is not already present, either through the distribution or [rustup](https://rustup.rs/)
 
+```bash
 # Fetch and build
 git clone https://github.com/embeddedTS/silod.git
 cd silod
@@ -47,7 +45,7 @@ cargo build --release
 
 # Install the binary (requires root for /usr/sbin)
 sudo install -m 0755 target/release/silod /usr/sbin/
-sudo mkdir -p /etc/silod/scripts/{power-fail,power-restored,fully-charged,critical}
+sudo mkdir -p /etc/silod/scripts.d/{power-fail,power-restored,fully-charged,critical}
 ```
 
 ## Usage
@@ -64,7 +62,7 @@ systemctl start silod.service
 |-------|-----------|--------------|
 | **Initial charge** | First run after boot | – |
 | **Fully charged**  | Online **and** capacity == 100 % | `fully-charged` |
-| **Power‑fail**     | Input lost while capacity ≥ threshold | `power-fail` |
+| **Power‑fail**     | Input lost while current capacity ≥ threshold | `power-fail` |
 | **Power‑restored** | Input restored | `power-restored` |
 | **Critical**       | `capacity < critical_pct` | `critical` |
 
@@ -74,13 +72,13 @@ systemctl start silod.service
 
 ```toml
 # Mandatory: percent below which the system shuts down
-critical_pct = 8
+critical_pct = 60
 
 # Optional: enable or inhibit charging (maps to charge_behaviour)
 enable_charging = true
 
 # Optional: minimum capacity required before the board may power on again
-min_power_on_pct = 20
+min_power_on_pct = 80
 
 # Optional: initial charge current (mA) applied after a brown‑out
 startup_charge_current_ma = 500
@@ -148,5 +146,3 @@ Set the log level with the `RUST_LOG` environment variable, e.g.:
 ```bash
 sudo RUST_LOG=debug silod
 ```
-
----
