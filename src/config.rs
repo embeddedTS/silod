@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub struct Config {
     pub critical_pct: u32,
     pub startup_charge_current_ma: Option<u32>,
+    pub startup_charge_current_pct: Option<u32>,
     pub min_power_on_pct: Option<u32>,
     pub enable_charging: Option<bool>,
 }

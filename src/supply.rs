@@ -123,6 +123,12 @@ impl Supply {
             
             let res = self.sysfs_write_u32(key, value);
             self.log_attr_result(key, value, res);
+        } else if let Some(startup_charge_current_pct) = cfg.startup_charge_current_pct {
+            let max_ma = self.sysfs_read_u32("charge_current_max")?;
+            let key = "startup_charge_current_ma";
+            let value = (startup_charge_current_pct.saturating_mul(max_ma) / 100).clamp(0, max_ma);
+            let res = self.sysfs_write_u32(key, value);
+            self.log_attr_result(key, value, res);
         }
 
         let key = "capacity_alert_min";
