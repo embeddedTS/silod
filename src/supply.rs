@@ -26,7 +26,7 @@ pub struct Supply {
 
 impl Supply {
     pub fn new() -> io::Result<Self> {
-        let driver_name = "tssilo".to_string();
+        let driver_name = "silo".to_string();
         let base_path = PathBuf::from("/sys/class/power_supply").join(&driver_name);
 
         Self::verify_power_supply(&base_path)?;
