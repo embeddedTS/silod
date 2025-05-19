@@ -1,8 +1,6 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::io::Error;
-use std::io::ErrorKind;
 
 use crate::config::Config;
 use crate::uevent::Uevent;
