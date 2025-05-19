@@ -197,19 +197,8 @@ impl Supply {
     fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<String> {
         let path = self.base_path.join(attr);
         fs::write(&path, format!("{requested}\n"))?;
-        
-        let readback = self.sysfs_read_str(attr)?;
-        let actual = readback
-            .split_whitespace()
-            .find_map(|word| {
-                if word.starts_with('[') && word.ends_with(']') {
-                    Some(word.trim_matches(['[', ']'].as_ref()))
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "No bracketed value found"))?;
 
-        Ok(actual.to_string())
+        let actual = self.sysfs_read_str(attr)?;
+        Ok(actual)
     }
 }
