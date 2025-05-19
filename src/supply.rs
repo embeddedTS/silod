@@ -178,7 +178,7 @@ impl Supply {
     fn sysfs_read_u32(&self, attr: &str) -> io::Result<u32> {
         let path = self.base_path.join(attr);
         let value = fs::read_to_string(&path)?;
-        let value = value.parse::<u32>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to parse '{}': {}", value, e)))?;
+        let value = value.trim().parse::<u32>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to parse '{value}': {e}")))?;
 
         Ok(value)
     }
