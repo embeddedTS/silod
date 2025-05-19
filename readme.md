@@ -14,23 +14,6 @@ Features:
 * Logs to **stdout** when run interactively, or to **syslog** (`LOG_DAEMON`) when run as a background service.
 * Re‑execs `shutdown -p now` automatically once a *critical* capacity threshold is crossed.
 
----
-
-## Table of Contents
-1. [Install](#install)
-   1. [Build on the target platform](#build-on-the-target-platform)
-   2. [Cross‑compile](#cross-compile)
-2. [Usage](#usage)
-   1. [Default behaviour](#default-behaviour)
-   2. [Configuration file](#configuration-file)
-   3. [Scripts](#scripts)
-3. [Running as a systemd service](#running-as-a-systemd-service)
-4. [Logging](#logging)
-5. [Contributing](#contributing)
-6. [License](#license)
-
----
-
 ## Install
 
 ### Build on the target platform
