@@ -40,8 +40,8 @@ pub fn run(ev: Event) -> io::Result<()> {
 
         match Command::new(&path).status() {
             Ok(st) if st.success() => {}
-            Ok(st) => log::error!("{:?} exited with status {}", path, st),
-            Err(e) => log::error!("failed to exec {:?}: {e}", path),
+            Ok(st) => log::error!("{path:?} exited with status {st}"),
+            Err(e) => log::error!("failed to exec {path:?}: {e}"),
         }
     }
 

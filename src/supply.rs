@@ -50,8 +50,7 @@ impl Supply {
         let status = self.sysfs_read_str("status")?;
 
         log::info!(
-            "wait_event: status='{}', capacity={}%, critical_threshold={}%, online={}",
-            status, capacity, crit_pct, online
+            "wait_event: status='{status}', capacity={capacity}%, critical_threshold={crit_pct}%, online={online}"
         );
 
         let ret = if capacity < crit_pct && self.current_event != Event::InitialCharge {

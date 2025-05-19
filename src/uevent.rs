@@ -25,7 +25,7 @@ impl Uevent {
         let nlhdr: Nlmsghdr<u16, Vec<u8>> =
             self.sock
                 .recv()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                .map_err(io::Error::other)?
                 .ok_or_else(|| io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "no message available",
