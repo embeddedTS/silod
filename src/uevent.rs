@@ -1,54 +1,33 @@
 use std::io;
-use std::time::Duration;
+use netlink_sys::{protocols::NETLINK_KOBJECT_UEVENT, Socket, SocketAddr};
+use kobject_uevent::{ActionType, UEvent};
 
-use neli::{
-    consts::socket::NlFamily,
-    nl::{Nlmsghdr, NlPayload},
-    socket::NlSocketHandle,
-};
-
-const UEVENT_MCAST_GRP: u32 = 1;
-
-pub struct Uevent {
-    sock: NlSocketHandle,
+pub struct UeventListener {
+    socket: Socket,
 }
 
-impl Uevent {
+impl UeventListener {
     pub fn connect() -> io::Result<Self> {
-        let sock = NlSocketHandle::connect(NlFamily::Generic, None, &[])?;
-        sock.add_mcast_membership(&[UEVENT_MCAST_GRP])?;
-
-        Ok(Uevent { sock })
+        let mut socket = Socket::new(NETLINK_KOBJECT_UEVENT)?;
+        // 1 = multicast group for all uevents
+        socket.bind(&SocketAddr::new(std::process::id(), 1))?;
+        log::debug!("uevent socket ready (NETLINK_KOBJECT_UEVENT, group 1)");
+        Ok(Self { socket })
     }
 
-    pub fn wait_event(&mut self, driver_name: &str, _timeout: Option<Duration>) -> io::Result<bool> {
-        let nlhdr: Nlmsghdr<u16, Vec<u8>> =
-            self.sock
-                .recv()
-                .map_err(io::Error::other)?
-                .ok_or_else(|| io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "no message available",
-                ))?;
+    /// Block until the next uevent; return true if it's a `change`
+    /// for our power-supply device.
+    pub fn wait_event(&mut self, sysname: &str) -> io::Result<Option<UEvent>> {
+        loop {
+            let (buf, _) = self.socket.recv_from_full()?;
+            let evt = UEvent::from_netlink_packet(&buf).map_err(io::Error::other)?;
 
-        match nlhdr.nl_payload {
-            NlPayload::Payload(p) => self.parse_blob(&p, driver_name),
-            _ => Ok(false),
-        }
-    }
-
-    fn parse_blob(&self, payload: &[u8], sysname: &str) -> io::Result<bool> {
-        let mut from_this_device = false;
-        let mut is_change = false;
-
-        for field in payload.split(|&b| b == 0).filter_map(|s| std::str::from_utf8(s).ok()) {
-            if let Some(name) = field.strip_prefix("POWER_SUPPLY_NAME=") {
-                from_this_device = name == sysname;
-            } else if let Some(val) = field.strip_prefix("ACTION=") {
-                is_change = val == "change";
+            // Only propagate “change” events for our driver
+            if evt.action == ActionType::Change
+                && evt.env.get("POWER_SUPPLY_NAME").map(|s| s == sysname).unwrap_or(false)
+            {
+                return Ok(Some(evt));
             }
         }
-
-        Ok(from_this_device && is_change)
     }
 }

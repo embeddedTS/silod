@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::uevent::Uevent;
+use crate::uevent::UeventListener;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Event {
@@ -18,7 +18,7 @@ pub enum Event {
 pub struct Supply {
     driver_name: String,
     base_path: PathBuf,
-    uevent: Uevent,
+    uevent: UeventListener,
     current_event: Event,
 }
 
@@ -29,7 +29,7 @@ impl Supply {
 
         Self::verify_power_supply(&base_path)?;
 
-        let uevent = Uevent::connect()?;
+        let uevent = UeventListener::connect()?;
         Ok(Supply {
             driver_name,
             base_path,
@@ -39,17 +39,41 @@ impl Supply {
     }
 
     pub fn wait_event(&mut self) -> io::Result<Event> {
+        let ret = self._wait_event()?;
+        if ret != Event::NoChange {
+            self.current_event = ret;
+        }
+        Ok(ret)
+    }
+
+    fn _wait_event(&mut self) -> io::Result<Event> {
         /* Blocks until uevent notifies us of a 'change' for this driver. */
-        self.uevent.wait_event(&self.driver_name, None)?;
+        let evt = match self.uevent.wait_event(&self.driver_name)? {
+            Some(e) => e.env,
+            None    => return Ok(Event::NoChange),
+        };
 
-        let capacity = self.sysfs_read_u32("capacity")?;
-        let crit_pct = self.sysfs_read_u32("capacity_alert_min")?;
-        let online = self.sysfs_read_u32("online")? == 1;
-        let status = self.sysfs_read_str("status")?;
+        let capacity = evt.get("POWER_SUPPLY_CAPACITY")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing capacity"))?
+            .parse::<u32>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad capacity: {e}")))?;
 
-        log::info!(
-            "wait_event: status='{status}', capacity={capacity}%, critical_threshold={crit_pct}%, online={online}"
-        );
+        let crit_pct = evt.get("POWER_SUPPLY_CAPACITY_ALERT_MIN")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_CAPACITY_ALERT_MIN"))?
+            .parse::<u32>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid POWER_SUPPLY_CAPACITY_ALERT_MIN: {e}")))?;
+
+        let online = evt.get("POWER_SUPPLY_ONLINE")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_ONLINE"))?
+            .parse::<u32>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid POWER_SUPPLY_ONLINE: {e}")))
+            .map(|v| v == 1)?;
+
+        let status = evt.get("POWER_SUPPLY_STATUS")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_STATUS"))?
+            .to_string();
+
+        log::info!("wait_event: status='{status}', capacity={capacity}%, critical_threshold={crit_pct}%, online={online}");
 
         let ret = if capacity < crit_pct && self.current_event != Event::InitialCharge {
             /* If this isn't our initial startup, and our capacity is < critical, we always
