@@ -4,7 +4,6 @@ mod scripts;
 mod uevent;
 
 use std::io::{self, IsTerminal};
-use std::env::args;
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use syslog::{Facility, Formatter3164};
