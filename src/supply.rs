@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -13,6 +14,20 @@ pub enum Event {
     FullyCharged,
     InitialCharge,
     Critical,
+}
+
+impl fmt::Display for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Event::NoChange => "NoChange",
+            Event::PowerFail => "PowerFail",
+            Event::PowerRestored => "PowerRestored",
+            Event::FullyCharged => "FullyCharged",
+            Event::InitialCharge => "InitialCharge",
+            Event::Critical => "Critical",
+        };
+        write!(f, "{s}")
+    }
 }
 
 pub struct Supply {
@@ -34,7 +49,7 @@ impl Supply {
             driver_name,
             base_path,
             uevent,
-            current_event: Event::NoChange,
+            current_event: Event::InitialCharge,
         })
     }
 
@@ -42,6 +57,10 @@ impl Supply {
         let ret = self._wait_event()?;
         if ret != Event::NoChange {
             self.current_event = ret;
+            log::info!(
+                "New event: {}",
+                self.current_event
+            );
         }
         Ok(ret)
     }
@@ -73,7 +92,10 @@ impl Supply {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_STATUS"))?
             .to_string();
 
-        log::info!("wait_event: status='{status}', capacity={capacity}%, critical_threshold={crit_pct}%, online={online}");
+        log::info!(
+            "wait_event: status='{status}', capacity={capacity}%, critical_threshold={crit_pct}%, online={online}, last_event={}",
+            self.current_event
+        );
 
         let ret = if capacity < crit_pct && self.current_event != Event::InitialCharge {
             /* If this isn't our initial startup, and our capacity is < critical, we always
@@ -82,7 +104,7 @@ impl Supply {
         } else {
             match self.current_event {
                 Event::InitialCharge => {
-                    if online && capacity == 100 {
+                    if (online && capacity == 100) || (online && status == "Full") {
                         Event::FullyCharged
                     } else if !online {
                         Event::PowerFail
