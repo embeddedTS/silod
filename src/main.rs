@@ -4,6 +4,7 @@ mod scripts;
 mod uevent;
 
 use std::io::{self, IsTerminal};
+use std::env::args;
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use syslog::{Facility, Formatter3164};
@@ -15,6 +16,8 @@ use supply::{Supply, Event};
 const CONFIG_PATH: &str = "/etc/silod/silo.toml";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let dry_run = std::env::args().any(|arg| arg == "--dry-run" || arg == "-n");
+
     /* If run in a tty, print to the terminal. Otherwise, log to syslog. */
     if io::stdout().is_terminal() {
         SimpleLogger::new()
@@ -56,19 +59,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             supply::Event::NoChange => continue,
 
             e @ Event::Critical => {
+                if dry_run {
+                    log::warn!("(dry-run) critical event would have triggered shutdown and script");
+                    continue;
+                }
+
                 scripts::run(e)?;
                 log::warn!("critical event processed — shutting down");
 
                 // exec returns only on error
                 let err = Command::new("shutdown")
-                    .args(["-p", "now"])
+                    .args(["-P", "now"])
                     .exec();
 
                 log::error!("failed to exec shutdown: {err}");
                 exit(1);
             }
 
-            e => scripts::run(e)?,
+            e =>  {
+                if dry_run {
+                    log::info!("(dry-run) would run script for event: {e:?}");
+                    continue;
+                }
+
+                scripts::run(e)?
+            }
         }
     }
 }
