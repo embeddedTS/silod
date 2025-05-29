@@ -103,7 +103,7 @@ impl Supply {
             Event::Critical
         } else {
             match self.current_event {
-                Event::InitialCharge => {
+                Event::InitialCharge | Event::PowerRestored => {
                     if online && (status == "Full" || capacity == 100) {
                         Event::FullyCharged
                     } else if !online {
@@ -122,15 +122,6 @@ impl Supply {
                 Event::PowerFail => {
                     if online {
                         Event::PowerRestored
-                    } else {
-                        Event::NoChange
-                    }
-                }
-                Event::PowerRestored => {
-                    if online && capacity == 100 {
-                        Event::FullyCharged
-                    } else if !online {
-                        Event::PowerFail
                     } else {
                         Event::NoChange
                     }
