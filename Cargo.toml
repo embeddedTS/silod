@@ -1,5 +1,6 @@
 [package]
 name = "silod"
+description = "Manage TS-SILO Supercap events"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -20,3 +21,30 @@ opt-level = "z"
 strip = true
 panic = "abort"
 debug = false
+
+[package.metadata.deb]
+maintainer-scripts = "debian/"
+maintainer = "Mark Featherston <mark@embeddedts.com>"
+copyright = "2025, Technologic Systems"
+
+extended-description = """
+silod is a minimal Rust daemon for embedded Linux that listens to kernel
+uevents from the TS-SILO super-capacitor driver.  It applies user-specified
+charging limits, runs hook scripts on power events, and initiates a clean
+shutdown when capacity reaches a critical threshold.
+"""
+
+section = "utils"
+priority = "optional"
+systemd-units = { enable = true, restart-after-upgrade = true }
+
+# List every file to be installed by the .deb:
+assets = [
+    # Binary → /usr/sbin (matches README & ExecStart)
+    ["target/release/silod", "usr/bin/", "755"],
+
+    # Default configuration file (marked as a conffile below)
+    ["config.toml.example", "etc/silod/config.toml", "644"],
+]
+
+conf-files = ["/etc/silod/silo.toml"]

@@ -1,0 +1,13 @@
+[Unit]
+Description=TS‑SILO supercap backup monitor
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/silod
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+#!/bin/sh
+# post-installation script for the silod Debian package
+set -e
+
+case "$1" in
+    configure|triggered)
+        # Create hook directories if the user deleted them
+        install -d -m 0755 \
+            /etc/silod/scripts.d/power-fail \
+            /etc/silod/scripts.d/power-restored \
+            /etc/silod/scripts.d/fully-charged \
+            /etc/silod/scripts.d/critical
+        ;;
+esac
+
+set +e
+
+#DEBHELPER#
+
