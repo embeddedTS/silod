@@ -31,14 +31,14 @@ extended-description = """
 silod is a minimal Rust daemon for embedded Linux that listens to kernel
 uevents from the TS-SILO super-capacitor driver.  It applies user-specified
 charging limits, runs hook scripts on power events, and initiates a clean
-shutdown when capacity reaches a critical threshold.
+shutdown when power has failed and capacity is below a critical threshold.
 """
 
 section = "utils"
 priority = "optional"
 systemd-units = { enable = true, restart-after-upgrade = true }
 assets = [
-    ["target/release/silod", "usr/bin/", "755"],
+    ["target/release/silod", "usr/sbin/", "755"],
     ["silo.toml.example", "etc/silod/silo.toml", "644"],
 ]
 conf-files = ["/etc/silod/silo.toml"]
