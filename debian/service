@@ -4,7 +4,7 @@ After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/silod
+ExecStart=/usr/sbin/silod
 Restart=always
 User=root
 Group=root
