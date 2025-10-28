@@ -137,7 +137,7 @@ impl Supply {
         if let Some(enable_charging) = cfg.enable_charging {
             let key = "charge_behaviour";
             let value = if enable_charging { "auto" }
-                        else { "inhibit-charging" };
+                        else { "inhibit-charge" };
             
             let res = self.sysfs_write_str(key, value);
             self.log_attr_result_str(key, value, res);
