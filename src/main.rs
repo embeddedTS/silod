@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut supply = match Supply::new() {
+    let mut supply = match Supply::new(cfg.critical_pct) {
         Ok(s) => s,
         Err(e) => {
             if e.kind() == io::ErrorKind::NotFound {

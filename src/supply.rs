@@ -35,10 +35,14 @@ pub struct Supply {
     base_path: PathBuf,
     uevent: UeventListener,
     current_event: Event,
+    critical_pct: u32,
 }
 
 impl Supply {
-    pub fn new() -> io::Result<Self> {
+    pub fn new(critical_pct: u32) -> io::Result<Self> {
+        if critical_pct > 100 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "critical_pct must be at most 100"));
+        }
         let driver_name = "silo".to_string();
         let base_path = PathBuf::from("/sys/class/power_supply").join(&driver_name);
 
@@ -50,6 +54,7 @@ impl Supply {
             base_path,
             uevent,
             current_event: Event::InitialCharge,
+            critical_pct,
         })
     }
 
@@ -77,10 +82,10 @@ impl Supply {
             .parse::<u32>()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad capacity: {e}")))?;
 
-        let crit_pct = evt.get("POWER_SUPPLY_CAPACITY_ALERT_MIN")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_CAPACITY_ALERT_MIN"))?
-            .parse::<u32>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid POWER_SUPPLY_CAPACITY_ALERT_MIN: {e}")))?;
+        let crit_pct = critical_threshold(
+            evt.get("POWER_SUPPLY_CAPACITY_ALERT_MIN").map(String::as_str),
+            self.critical_pct,
+        )?;
 
         let online = evt.get("POWER_SUPPLY_ONLINE")
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_ONLINE"))?
@@ -167,8 +172,16 @@ impl Supply {
 
         let key = "capacity_alert_min";
         let value = cfg.critical_pct;
-        let res = self.sysfs_write_u32(key, value);
-        self.log_attr_result(key, value, res);
+        match fs::metadata(self.base_path.join(key)) {
+            Ok(_) => {
+                let res = self.sysfs_write_u32(key, value);
+                self.log_attr_result(key, value, res);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                log::info!("using configured critical threshold: {}%", self.critical_pct);
+            }
+            Err(e) => return Err(e),
+        }
 
         Ok(())
     }
@@ -235,5 +248,38 @@ impl Supply {
 
         let actual = self.sysfs_read_str(attr)?;
         Ok(actual)
+    }
+}
+
+// A missing hardware threshold is expected on older controllers. A malformed
+// advertised threshold remains an error rather than silently changing policy.
+fn critical_threshold(value: Option<&str>, configured: u32) -> io::Result<u32> {
+    match value {
+        Some(value) => value.parse::<u32>().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData,
+                format!("invalid POWER_SUPPLY_CAPACITY_ALERT_MIN: {e}"))
+        }),
+        None => Ok(configured),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_controller_uses_configured_threshold() {
+        assert_eq!(critical_threshold(None, 60).unwrap(), 60);
+    }
+
+    #[test]
+    fn hardware_threshold_takes_precedence() {
+        assert_eq!(critical_threshold(Some("25"), 60).unwrap(), 25);
+    }
+
+    #[test]
+    fn malformed_hardware_threshold_is_an_error() {
+        assert_eq!(critical_threshold(Some("broken"), 60).unwrap_err().kind(),
+                   io::ErrorKind::InvalidData);
     }
 }

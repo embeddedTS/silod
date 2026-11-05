@@ -129,3 +129,12 @@ Set the log level with the `RUST_LOG` environment variable, e.g.:
 ```bash
 sudo RUST_LOG=debug silod
 ```
+
+### Controllers without a hardware capacity threshold
+
+When `POWER_SUPPLY_CAPACITY_ALERT_MIN` is absent from a supply event, silod
+uses `critical_pct` from its configuration. Hardware-provided thresholds still
+take precedence. Invalid advertised thresholds remain errors. The driver must
+provide periodic capacity events (the TS-7100/TS-7180 driver polls once per
+second); silod does not itself poll sysfs. Unsupported optional boot-charge
+settings should be omitted from the configuration.
