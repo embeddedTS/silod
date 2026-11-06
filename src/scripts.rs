@@ -29,6 +29,7 @@ pub fn run(ev: Event) -> io::Result<()> {
         }
     };
 
+    let mut paths = Vec::new();
     for entry in entries {
         let path = match entry {
             Ok(e) => e.path(),
@@ -38,6 +39,11 @@ pub fn run(ev: Event) -> io::Result<()> {
             }
         };
 
+        paths.push(path);
+    }
+
+    paths.sort();
+    for path in paths {
         match Command::new(&path).status() {
             Ok(st) if st.success() => {}
             Ok(st) => log::error!("{path:?} exited with status {st}"),

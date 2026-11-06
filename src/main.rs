@@ -14,21 +14,30 @@ use supply::{Supply, Event};
 
 const CONFIG_PATH: &str = "/etc/silod/silo.toml";
 
+fn configured_log_level(value: Option<&str>) -> LevelFilter {
+    value
+        .and_then(|level| level.parse().ok())
+        .unwrap_or(LevelFilter::Info)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dry_run = std::env::args().any(|arg| arg == "--dry-run" || arg == "-n");
+    let log_level = configured_log_level(std::env::var("RUST_LOG").ok().as_deref());
 
     /* If run in a tty, print to the terminal. Otherwise, log to syslog. */
     if io::stdout().is_terminal() {
         SimpleLogger::new()
-            .with_level(LevelFilter::Info)
+            .with_level(log_level)
             .init()?;
     } else {
-        syslog::unix(Formatter3164 {
+        let logger = syslog::unix(Formatter3164 {
             facility: Facility::LOG_DAEMON,
             hostname: None,
             process: "silod".into(),
             pid: 0,
         })?;
+        log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)))?;
+        log::set_max_level(log_level);
     }
 
     let cfg = match config::Config::load(CONFIG_PATH) {
@@ -84,5 +93,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scripts::run(e)?
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_level_defaults_to_info() {
+        assert_eq!(configured_log_level(None), LevelFilter::Info);
+    }
+
+    #[test]
+    fn log_level_uses_rust_log_value() {
+        assert_eq!(configured_log_level(Some("debug")), LevelFilter::Debug);
+    }
+
+    #[test]
+    fn invalid_log_level_defaults_to_info() {
+        assert_eq!(configured_log_level(Some("silod=debug")), LevelFilter::Info);
     }
 }

@@ -142,32 +142,38 @@ impl Supply {
         if let Some(enable_charging) = cfg.enable_charging {
             let key = "charge_behaviour";
             let value = if enable_charging { "auto" }
-                        else { "inhibit-charging" };
-            
-            let res = self.sysfs_write_str(key, value);
-            self.log_attr_result_str(key, value, res);
+                        else { "inhibit-charge" };
+
+            match self.sysfs_write_str(key, value) {
+                Ok(()) => log::info!("{key} set to {value}"),
+                Err(e) => log::warn!("failed to set {key}={value}: {e}"),
+            }
         }
 
         if let Some(min_power_on_pct) = cfg.min_power_on_pct {
             let key = "device/min_power_on_pct";
             let value = min_power_on_pct;
             
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            self.write_optional_u32(key, value);
         }
 
         if let Some(startup_charge_current_ma) = cfg.startup_charge_current_ma {
             let key = "startup_charge_current_ma";
             let value = startup_charge_current_ma;
             
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            self.write_optional_u32(key, value);
         } else if let Some(startup_charge_current_pct) = cfg.startup_charge_current_pct {
-            let max_ma = self.sysfs_read_u32("constant_charge_current_max")?;
-            let key = "startup_charge_current_ma";
-            let value = (startup_charge_current_pct.saturating_mul(max_ma) / 100).clamp(0, max_ma);
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            match self.sysfs_read_u32("constant_charge_current_max") {
+                Ok(max_ma) => {
+                    let key = "startup_charge_current_ma";
+                    let value = (startup_charge_current_pct.saturating_mul(max_ma) / 100)
+                        .clamp(0, max_ma);
+                    self.write_optional_u32(key, value);
+                }
+                Err(e) => log::warn!(
+                    "configured startup charge current percentage is unsupported: {e}"
+                ),
+            }
         }
 
         let key = "capacity_alert_min";
@@ -194,20 +200,6 @@ impl Supply {
         }
     }
 
-    fn log_attr_result_str(&self, key: &str, requested: &str, res: io::Result<String>) {
-        match res {
-            Ok(actual) if actual == requested => {
-                log::info!("{key} set to {actual}");
-            }
-            Ok(actual) => {
-                log::warn!("requested {key}={requested}, but driver reports {actual}");
-            }
-            Err(e) => {
-                log::warn!("failed to set/read {key}: {e}");
-            }
-        }
-    }
-
     fn log_attr_result(&self, key: &str, requested: u32, res: io::Result<u32>) {
         match res {
             Ok(actual) if actual == requested => {
@@ -230,24 +222,30 @@ impl Supply {
         Ok(value)
     }
 
-    fn sysfs_read_str(&self, attr: &str) -> io::Result<String> {
-        let path = self.base_path.join(attr);
-        let content = fs::read_to_string(&path)?;
-        Ok(content.trim().to_string())
-    }
-
     fn sysfs_write_u32(&self, attr: &str, requested: u32) -> io::Result<u32> {
         let path = self.base_path.join(attr);
         fs::write(&path, format!("{requested}\n"))?;
         self.sysfs_read_u32(attr)
     }
 
-    fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<String> {
+    fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<()> {
         let path = self.base_path.join(attr);
         fs::write(&path, format!("{requested}\n"))?;
 
-        let actual = self.sysfs_read_str(attr)?;
-        Ok(actual)
+        Ok(())
+    }
+
+    fn write_optional_u32(&self, attr: &str, value: u32) {
+        match fs::metadata(self.base_path.join(attr)) {
+            Ok(_) => {
+                let res = self.sysfs_write_u32(attr, value);
+                self.log_attr_result(attr, value, res);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                log::warn!("configured {attr}, but this power supply does not support it; skipping");
+            }
+            Err(e) => log::warn!("cannot check support for {attr}: {e}"),
+        }
     }
 }
 

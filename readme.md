@@ -67,7 +67,8 @@ min_power_on_pct = 80
 startup_charge_current_ma = 500
 ```
 
-All values are written to `/sys/class/power_supply/tssilo/…` and logged back for verification.
+Supported values are written to `/sys/class/power_supply/silo/…`; settings without readback are logged as applied after a successful sysfs write.
+On older controllers, unsupported optional settings are logged and skipped; they are not emulated.
 
 ### Scripts
 
