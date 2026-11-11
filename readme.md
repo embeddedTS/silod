@@ -67,8 +67,7 @@ min_power_on_pct = 80
 startup_charge_current_ma = 500
 ```
 
-Supported values are written to `/sys/class/power_supply/silo/…`; settings without readback are logged as applied after a successful sysfs write.
-On older controllers, unsupported optional settings are logged and skipped; they are not emulated.
+Supported values are written to `/sys/class/power_supply/silo/…`; settings without readback are logged after successful writes. Unsupported optional settings are skipped. If `capacity_alert_min` is absent, silod uses `critical_pct` from its configuration.
 
 ### Scripts
 
@@ -91,7 +90,7 @@ curl -X POST http://your-server.example.com/log \
 
 ```
 
-Scripts are executed sequentially in filename order. Failures are logged, but do **not** abort the chain.
+Scripts are executed sequentially; ordering is unspecified. Failures are logged, but do **not** abort the chain.
 
 ---
 
@@ -125,17 +124,3 @@ sudo systemctl enable --now silod.service
 * Interactive run → **stderr/stdout** with ANSI colours.  
 * Background/service run → **syslog** (`LOG_DAEMON`), view with `journalctl -t silod` on systemd systems.
 
-Set the log level with the `RUST_LOG` environment variable, e.g.:
-
-```bash
-sudo RUST_LOG=debug silod
-```
-
-### Controllers without a hardware capacity threshold
-
-When `POWER_SUPPLY_CAPACITY_ALERT_MIN` is absent from a supply event, silod
-uses `critical_pct` from its configuration. Hardware-provided thresholds still
-take precedence. Invalid advertised thresholds remain errors. The driver must
-provide periodic capacity events (the TS-7100/TS-7180 driver polls once per
-second); silod does not itself poll sysfs. Unsupported optional boot-charge
-settings should be omitted from the configuration.
