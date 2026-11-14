@@ -1,6 +1,7 @@
 [Unit]
 Description=TS‑SILO supercap backup monitor
 After=multi-user.target
+ConditionPathIsDirectory=/sys/class/power_supply/silo
 
 [Service]
 Type=simple
