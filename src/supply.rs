@@ -35,10 +35,14 @@ pub struct Supply {
     base_path: PathBuf,
     uevent: UeventListener,
     current_event: Event,
+    critical_pct: u32,
 }
 
 impl Supply {
-    pub fn new() -> io::Result<Self> {
+    pub fn new(critical_pct: u32) -> io::Result<Self> {
+        if critical_pct > 100 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "critical_pct must be at most 100"));
+        }
         let driver_name = "silo".to_string();
         let base_path = PathBuf::from("/sys/class/power_supply").join(&driver_name);
 
@@ -50,6 +54,7 @@ impl Supply {
             base_path,
             uevent,
             current_event: Event::InitialCharge,
+            critical_pct,
         })
     }
 
@@ -77,10 +82,10 @@ impl Supply {
             .parse::<u32>()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad capacity: {e}")))?;
 
-        let crit_pct = evt.get("POWER_SUPPLY_CAPACITY_ALERT_MIN")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_CAPACITY_ALERT_MIN"))?
-            .parse::<u32>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid POWER_SUPPLY_CAPACITY_ALERT_MIN: {e}")))?;
+        let crit_pct = critical_threshold(
+            evt.get("POWER_SUPPLY_CAPACITY_ALERT_MIN").map(String::as_str),
+            self.critical_pct,
+        )?;
 
         let online = evt.get("POWER_SUPPLY_ONLINE")
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POWER_SUPPLY_ONLINE"))?
@@ -137,38 +142,52 @@ impl Supply {
         if let Some(enable_charging) = cfg.enable_charging {
             let key = "charge_behaviour";
             let value = if enable_charging { "auto" }
-                        else { "inhibit-charging" };
-            
-            let res = self.sysfs_write_str(key, value);
-            self.log_attr_result_str(key, value, res);
+                        else { "inhibit-charge" };
+
+            match self.sysfs_write_str(key, value) {
+                Ok(()) => log::info!("{key} set to {value}"),
+                Err(e) => log::warn!("failed to set {key}={value}: {e}"),
+            }
         }
 
         if let Some(min_power_on_pct) = cfg.min_power_on_pct {
             let key = "device/min_power_on_pct";
             let value = min_power_on_pct;
             
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            self.write_optional_u32(key, value);
         }
 
         if let Some(startup_charge_current_ma) = cfg.startup_charge_current_ma {
             let key = "startup_charge_current_ma";
             let value = startup_charge_current_ma;
             
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            self.write_optional_u32(key, value);
         } else if let Some(startup_charge_current_pct) = cfg.startup_charge_current_pct {
-            let max_ma = self.sysfs_read_u32("constant_charge_current_max")?;
-            let key = "startup_charge_current_ma";
-            let value = (startup_charge_current_pct.saturating_mul(max_ma) / 100).clamp(0, max_ma);
-            let res = self.sysfs_write_u32(key, value);
-            self.log_attr_result(key, value, res);
+            match self.sysfs_read_u32("constant_charge_current_max") {
+                Ok(max_ma) => {
+                    let key = "startup_charge_current_ma";
+                    let value = (startup_charge_current_pct.saturating_mul(max_ma) / 100)
+                        .clamp(0, max_ma);
+                    self.write_optional_u32(key, value);
+                }
+                Err(e) => log::warn!(
+                    "configured startup charge current percentage is unsupported: {e}"
+                ),
+            }
         }
 
         let key = "capacity_alert_min";
         let value = cfg.critical_pct;
-        let res = self.sysfs_write_u32(key, value);
-        self.log_attr_result(key, value, res);
+        match fs::metadata(self.base_path.join(key)) {
+            Ok(_) => {
+                let res = self.sysfs_write_u32(key, value);
+                self.log_attr_result(key, value, res);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                log::info!("using configured critical threshold: {}%", self.critical_pct);
+            }
+            Err(e) => return Err(e),
+        }
 
         Ok(())
     }
@@ -178,20 +197,6 @@ impl Supply {
             Ok(())
         } else {
             Err(io::Error::from(io::ErrorKind::NotFound))
-        }
-    }
-
-    fn log_attr_result_str(&self, key: &str, requested: &str, res: io::Result<String>) {
-        match res {
-            Ok(actual) if actual == requested => {
-                log::info!("{key} set to {actual}");
-            }
-            Ok(actual) => {
-                log::warn!("requested {key}={requested}, but driver reports {actual}");
-            }
-            Err(e) => {
-                log::warn!("failed to set/read {key}: {e}");
-            }
         }
     }
 
@@ -217,23 +222,62 @@ impl Supply {
         Ok(value)
     }
 
-    fn sysfs_read_str(&self, attr: &str) -> io::Result<String> {
-        let path = self.base_path.join(attr);
-        let content = fs::read_to_string(&path)?;
-        Ok(content.trim().to_string())
-    }
-
     fn sysfs_write_u32(&self, attr: &str, requested: u32) -> io::Result<u32> {
         let path = self.base_path.join(attr);
         fs::write(&path, format!("{requested}\n"))?;
         self.sysfs_read_u32(attr)
     }
 
-    fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<String> {
+    fn sysfs_write_str(&self, attr: &str, requested: &str) -> io::Result<()> {
         let path = self.base_path.join(attr);
         fs::write(&path, format!("{requested}\n"))?;
 
-        let actual = self.sysfs_read_str(attr)?;
-        Ok(actual)
+        Ok(())
+    }
+
+    fn write_optional_u32(&self, attr: &str, value: u32) {
+        match fs::metadata(self.base_path.join(attr)) {
+            Ok(_) => {
+                let res = self.sysfs_write_u32(attr, value);
+                self.log_attr_result(attr, value, res);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                log::warn!("configured {attr}, but this power supply does not support it; skipping");
+            }
+            Err(e) => log::warn!("cannot check support for {attr}: {e}"),
+        }
+    }
+}
+
+// A missing hardware threshold is expected on older controllers. A malformed
+// advertised threshold remains an error rather than silently changing policy.
+fn critical_threshold(value: Option<&str>, configured: u32) -> io::Result<u32> {
+    match value {
+        Some(value) => value.parse::<u32>().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData,
+                format!("invalid POWER_SUPPLY_CAPACITY_ALERT_MIN: {e}"))
+        }),
+        None => Ok(configured),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_controller_uses_configured_threshold() {
+        assert_eq!(critical_threshold(None, 60).unwrap(), 60);
+    }
+
+    #[test]
+    fn hardware_threshold_takes_precedence() {
+        assert_eq!(critical_threshold(Some("25"), 60).unwrap(), 25);
+    }
+
+    #[test]
+    fn malformed_hardware_threshold_is_an_error() {
+        assert_eq!(critical_threshold(Some("broken"), 60).unwrap_err().kind(),
+                   io::ErrorKind::InvalidData);
     }
 }

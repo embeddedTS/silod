@@ -23,12 +23,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_level(LevelFilter::Info)
             .init()?;
     } else {
-        syslog::unix(Formatter3164 {
+        let logger = syslog::unix(Formatter3164 {
             facility: Facility::LOG_DAEMON,
             hostname: None,
             process: "silod".into(),
             pid: 0,
         })?;
+        log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)))?;
+        log::set_max_level(LevelFilter::Info);
     }
 
     let cfg = match config::Config::load(CONFIG_PATH) {
@@ -39,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut supply = match Supply::new() {
+    let mut supply = match Supply::new(cfg.critical_pct) {
         Ok(s) => s,
         Err(e) => {
             if e.kind() == io::ErrorKind::NotFound {
@@ -86,3 +88,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 }
+
